@@ -1,0 +1,30 @@
+Write a fused Triton kernel for the AWQ W4A16 GEMM used by Qwen/Qwen3-4B-AWQ.
+
+This is the linear layer of that model. Activations are BF16. Weights are 4-bit AWQ with group size 128 and zero points, packed in the AutoAWQ GEMM layout (quant_method=awq, version=gemm, bits=4, zero_point=true).
+
+Model shapes this kernel must support (K and N are always multiples of 128):
+- gate_proj / up_proj: K=2560, N=9728
+- down_proj: K=9728, N=2560
+- q_proj: K=2560, N=4096
+- k_proj / v_proj: K=2560, N=1024
+- o_proj: K=4096, N=2560
+Decode uses M=1. Short prefill uses M up to 128. Optimize for M=1 on an RTX 4070 (Ada, sm_89, 8 GB).
+
+API:
+    y = kernel_function(x, qweight, scales, qzeros)
+
+Arguments:
+- x:        [M, K] bf16, CUDA, row-major activations
+- qweight:  [K, N // 8] int32. Along N, 8 consecutive 4-bit weights are packed into one int32, little-endian nibbles. Output channel n lives in bits [4*(n % 8), 4*(n % 8)+4) of qweight[k, n // 8].
+- scales:   [K // 128, N] bf16
+- qzeros:   [K // 128, N // 8] int32, packed the same way as qweight
+- return y: [M, N] bf16
+
+Dequantization for each weight W[k, n], with g = k // 128:
+    w_i4 = (qweight[k, n // 8] >> (4 * (n % 8))) & 0xF
+    z_i4 = (qzeros[g, n // 8]  >> (4 * (n % 8))) & 0xF
+    W[k, n] = (w_i4 - z_i4) * scales[g, n]
+
+Then y = x @ W. Do the unpack, subtract, scale, and dot product inside Triton. Do not materialize the full FP16/BF16 weight matrix.
+
+Numerics: accumulate the dot product in FP32 and store BF16. A correct kernel matches a PyTorch reference of the formula above within bf16 tolerance (rtol=2e-2, atol=2e-2).

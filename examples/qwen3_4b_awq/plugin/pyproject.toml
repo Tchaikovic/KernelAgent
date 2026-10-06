@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kernelagent-awq-vllm"
+version = "0.0.1"
+description = "Swap vLLM AWQ GEMM for the KernelAgent Triton kernel"
+
+[project.entry-points."vllm.general_plugins"]
+kernelagent_awq = "kernelagent_awq_vllm:register"
+
+[tool.setuptools]
+py-modules = ["kernelagent_awq_vllm"]
